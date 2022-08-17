@@ -1,0 +1,37 @@
+name: Production
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  pre-deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [16.x]
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: make install-dependencies
+      - run: make lint
+
+  build:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v2
+      - uses: akhileshns/heroku-deploy@v3.12.12
+        with:
+          heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
+          heroku_app_name: melodyn-zoomtube
+          heroku_email: samelodyn@gmail.com
+        env:
+          HD_NODE_ENV: production
+          HD_LOG_LEVEL: info
+          HD_ROUTE_UUID: ${{ secrets.HD_ROUTE_UUID }}
