@@ -33,5 +33,6 @@ jobs:
           heroku_email: samelodyn@gmail.com
         env:
           HD_NODE_ENV: production
+          HD_HOST: 0.0.0.0
           HD_LOG_LEVEL: info
           HD_ROUTE_UUID: ${{ secrets.HD_ROUTE_UUID }}
