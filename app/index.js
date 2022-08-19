@@ -1,9 +1,18 @@
+import fs from 'fs';
+import path, { dirname } from 'path';
+import { fileURLToPath } from 'url';
 // fastify
 import fastify from 'fastify';
 // libs
 
 // app
 import configValidator from '../utils/configValidator.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const bodyFixture = {
+  hello: "world"
+};
 
 const initServer = (config) => {
   const pinoPrettyTransport = {
@@ -25,13 +34,38 @@ const initServer = (config) => {
     handler(req, res) {
       const { body } = req;
 
-      res.code(200).send(body);
+      this.storage.write(bodyFixture);
+
+      res.code(200).send('ok');
     },
   };
 
   server.route(route);
 
   return server;
+};
+
+const initIncomingDataStorage =  async (server) => {
+  const filepath = path.join(__dirname, '..', 'data', 'incoming.json');
+
+  return fs
+    .promises
+    .readFile(filepath)
+    .then((data) => {
+      const json = JSON.parse(data);
+      console.log({ json });
+
+      const storage = {
+        write: (data) => {
+          json.push(data);
+          return fs
+            .promises
+            .writeFile(filepath, JSON.stringify(json));
+        },
+      };
+
+      server.decorate('storage', storage);
+    });
 };
 
 const app = async (envName) => {
@@ -42,6 +76,7 @@ const app = async (envName) => {
 
   const config = await configValidator(envName);
   const server = initServer(config);
+  await initIncomingDataStorage(server);
 
   server.decorate('config', config);
 
