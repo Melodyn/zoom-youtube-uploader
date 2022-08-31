@@ -3,6 +3,7 @@ import path from 'path';
 import _ from 'lodash';
 import dotenv from 'dotenv';
 import { ConfigValidationError } from './errors.js';
+import { __dirname } from './helpers.js';
 
 const envsMap = {
   prod: 'production',
@@ -10,7 +11,9 @@ const envsMap = {
   test: 'test',
 };
 
-const readFromFile = (configPath) => dotenv.config({ path: path.resolve(configPath) }).parsed;
+const readFromFile = (configPath) => dotenv.config({
+  path: path.resolve(__dirname, '..', configPath),
+}).parsed;
 const envConfigMap = {
   [envsMap.prod]: process.env,
   [envsMap.dev]: readFromFile('development.env'),
@@ -28,6 +31,11 @@ const configSchema = yup.object({
   HOST: yup.string().required(),
   LOG_LEVEL: yup.string().required(),
   ROUTE_UUID: yup.string().required(),
+  CRON_PERIOD: yup.string().required(),
+  CRON_DELAY: yup.string().required(),
+  STORAGE_DIRPATH: yup.string()
+    .transform((_, paths) => path.resolve(__dirname, ...paths.split(',')))
+    .required(),
 }).required();
 
 const configValidator = (envName) => {
@@ -38,6 +46,7 @@ const configValidator = (envName) => {
   return configSchema
     .validate(envConfig, { abortEarly: false })
     .catch((err) => {
+      console.error(err);
       throw new ConfigValidationError(err);
     });
 };

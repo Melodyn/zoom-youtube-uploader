@@ -9,3 +9,5 @@ export class ConfigValidationError extends AppError {
     this.message = validationError.errors.join('\n');
   }
 }
+
+export class CronServiceError extends AppError {}

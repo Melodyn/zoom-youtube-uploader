@@ -1,10 +1,11 @@
 import fs from 'fs';
-import path, { dirname } from 'path';
+import path from 'path';
 import { fileURLToPath } from 'url';
+import axios from 'axios';
 
-export const __dirname = dirname(fileURLToPath(import.meta.url));
+export const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export const padString = (string, endSymbol = '…', maxLength = 50) => {
+export const padString = (string, maxLength = 50, endSymbol = '…') => {
   if (string.length <= maxLength) {
     return string;
   }
@@ -13,9 +14,14 @@ export const padString = (string, endSymbol = '…', maxLength = 50) => {
   return `${paddedString}${endSymbol}`;
 };
 
-export const asyncTimeout = async (ms, cb = (() => {})) => new Promise((res) => {
-  setTimeout(() => res(cb()), ms);
-});
+export const asyncTimeout = (ms, cb = (() => {})) => {
+  let timerId = null;
+
+  return new Promise((resolve) => {
+    timerId = setTimeout(() => resolve(cb()), ms);
+  })
+    .then(() => timerId);
+};
 
 export const take = (array, count) => {
   const chunk = array.filter((e, i) => i < count);
@@ -31,10 +37,35 @@ export const toStr = (json) => {
   }
 };
 
-export const buildDataPath = (filename, ext = 'json') => path.join(__dirname, '..', 'data', `${filename}.${ext}`);
-export const buildVideoPath = (filename, ext = 'mp4') => path.join(__dirname, '..', 'videos', `${filename}.${ext}`);
+export const buildDataPath = (storageDirpath, filename, ext = 'json') => path
+  .resolve(storageDirpath, 'data', `${filename}.${ext}`);
+export const buildVideoPath = (storageDirpath, filename, ext = 'mp4') => path
+  .resolve(storageDirpath, 'videos', `${filename}.${ext}`);
 export const writeFile = (filepath, data) => fs.promises.writeFile(filepath, data, 'utf-8');
 export const readFile = (filepath) => fs.promises.readFile(filepath, 'utf-8').then((data) => JSON.parse(data));
+export const downloadZoomFile = ({ filepath, url, token }) => {
+  const file = fs.createWriteStream(filepath);
+
+  return axios
+    .get(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      responseType: 'stream',
+    })
+    .then(({ data }) => {
+      data.pipe(file);
+      return new Promise((res, rej) => {
+        file.on('finish', () => {
+          res(data);
+        });
+        file.on('error', (err) => {
+          rej(err);
+        });
+      });
+    });
+};
 
 export const createChunkLoader = (
   datasets,
