@@ -7,21 +7,23 @@ import fastify from 'fastify';
 import ms from 'ms';
 import _ from 'lodash';
 import * as luxon from 'luxon';
+import sqlite3 from 'sqlite3';
+import * as sqlite from 'sqlite';
 // app
 import configValidator from '../utils/configValidator.js';
-import { bodyFixture } from '../../data/fixture.mjs';
+import { bodyFixture } from '../../fixtures/fixture.mjs';
 import { CronService } from '../libs/CronService.js';
 import {
   padString,
   downloadZoomFile,
   buildVideoPath,
   buildDataPath,
+  writeFile,
 } from '../utils/helpers.js';
 
 const { DateTime } = luxon;
 
-const loadingStates = ['ready', 'loading', 'success', 'failed'];
-const loadingStatesEnum = loadingStates.reduce((acc, state) => {
+const loadStateEnum = ['ready', 'loading', 'success', 'failed'].reduce((acc, state) => {
   acc[state] = state;
   return acc;
 }, {});
@@ -57,18 +59,14 @@ const initTasks = (server) => {
   const itemsInProcessing = new Set();
 
   const downloadTask = () => {
-    const topicCountMap = new Map();
-
     return server.storage
       .read()
       .then((items) => {
         const operations = [];
 
-        items.forEach((item, itemIndex) => {
-          if (itemsInProcessing.has(itemIndex)) return true;
-
-          itemsInProcessing.add(itemIndex);
-          const { payload, download_token, loadingState } = item;
+        items.forEach((item) => {
+          const { id, loadFromZoomState, data } = item;
+          const { payload, download_token } = data;
           const {
             topic,
             duration,
@@ -77,34 +75,30 @@ const initTasks = (server) => {
             account_id
           } = payload.object;
           const preparedTopic = topic.trim().replace(' ', '');
+          const isTooShort = (duration < 5); // если запись менее 5 минут
+          const isLoaded = (loadFromZoomState === loadStateEnum.success);
+          const isLoading = (loadFromZoomState === loadStateEnum.loading);
+          const isProcessing = itemsInProcessing.has(id);
 
           const videoRecords = recording_files.filter(({ recording_type, status }) => (
             (recording_type === 'shared_screen_with_speaker_view')
             && (status === 'completed')
           ));
-
           const notHasVideo = videoRecords.length === 0;
-          const isTooShort = (duration < 5); // если запись менее 5 минут
-          const isLoaded = loadingState === loadingStatesEnum.success;
-          const isLoading = loadingState === loadingStatesEnum.loading;
 
-          if (notHasVideo || isTooShort || isLoaded || isLoading) {
+          if (notHasVideo || isTooShort || isLoaded || isLoading || isProcessing) {
             return true;
           }
+          itemsInProcessing.add(id);
 
-          if (!topicCountMap.has(preparedTopic)) {
-            topicCountMap.set(preparedTopic, 0);
-          }
-          const topicPrevIndex = topicCountMap.get(preparedTopic);
-          const topicIndex = topicPrevIndex + 1;
-          topicCountMap.set(preparedTopic, topicIndex);
-
-          if (loadingState === loadingStatesEnum.ready) {
+          if (loadFromZoomState === loadStateEnum.ready) {
             const parsedTopic = parseTopic(preparedTopic);
-            item.loadingState = loadingStatesEnum.loading;
+            item.loadFromZoomState = loadStateEnum.loading;
+
             const recordMeta = {
-              "loadingState": loadingStatesEnum.loading,
-              "loadingError": "",
+              "loadFromZoomState": loadStateEnum.loading,
+              "loadToYoutubeState": loadStateEnum.loading,
+              "downloadError": "",
               "isHexletTopic": (parsedTopic.type === topicEnum.hexlet),
               "isCollegeTopic": (parsedTopic.type === topicEnum.college),
               "date": DateTime.fromISO(start_time).setZone('Europe/Moscow').toFormat('dd.LL.yyyy'),
@@ -125,7 +119,7 @@ const initTasks = (server) => {
             const genPrefix = (index) => (videoRecords.length > 1 ? `Часть ${index + 1}, ` : '');
             videoRecords.forEach((record, recordIndex) => {
               const prefix = genPrefix(recordIndex);
-              const postfix = `;файл ${topicIndex}`;
+              const postfix = `;файл ${id}-${recordIndex}`;
 
               if (recordMeta.isHexletTopic || recordMeta.isCollegeTopic) {
                 const {
@@ -169,23 +163,23 @@ const initTasks = (server) => {
               record.meta = recordMeta;
 
               const operation = () => server.storage
-                .update(item, itemIndex)
-                .then(() => downloadZoomFile({
-                  filepath: recordMeta.filepath,
-                  url: record.download_url,
-                  token: download_token,
-                }))
+                .update(item)
+                // .then(() => downloadZoomFile({
+                //   filepath: recordMeta.filepath,
+                //   url: record.download_url,
+                //   token: download_token,
+                // }))
                 .then(() => {
-                  recordMeta.loadingState = loadingStatesEnum.success;
-                  item.loadingState = loadingStatesEnum.success;
-                  return server.storage.update(item, itemIndex);
+                  recordMeta.loadFromZoomState = loadStateEnum.success;
+                  item.loadFromZoomState = loadStateEnum.success;
+                  return server.storage.update(item);
                 })
                 .catch(err => {
                   console.error(err);
-                  recordMeta.loadingError = err.message;
-                  recordMeta.loadingState = loadingStatesEnum.failed;
-                  item.loadingState = loadingStatesEnum.failed;
-                  return server.storage.update(item, itemIndex);
+                  recordMeta.downloadError = err.message;
+                  recordMeta.loadFromZoomState = loadStateEnum.failed;
+                  item.loadFromZoomState = loadStateEnum.failed;
+                  return server.storage.update(item);
                 });
               operations.push(() => operation());
             });
@@ -217,6 +211,7 @@ const initServer = (config) => {
       level: config.LOG_LEVEL,
     },
   });
+  server.decorate('config', config);
 
   const route = {
     method: 'POST',
@@ -224,10 +219,15 @@ const initServer = (config) => {
     handler(req, res) {
       const { body } = req;
       const data = bodyFixture;
-      data.loadingState = loadingStatesEnum.ready;
 
-      this.storage.add(bodyFixture)
+      this.storage
+        .add({
+          loadFromZoomState: loadStateEnum.ready,
+          loadToYoutubeState: loadStateEnum.ready,
+          data,
+        })
         .then(() => res.code(200).send('ok'))
+        .then(console.log)
         .catch((err) => {
           console.error(err);
           res.code(400).send(err.message);
@@ -240,45 +240,78 @@ const initServer = (config) => {
   return server;
 };
 
-const initIncomingDataStorage = async (server) => {
-  const dirpathVideo = path.dirname(buildVideoPath(server.config.STORAGE_DIRPATH));
-  if (!fs.existsSync(dirpathVideo)) {
-    fs.mkdirSync(dirpathVideo);
+const initDatabase = async (server) => {
+  const dbFilepath = buildDataPath(server.config.STORAGE_DIRPATH, 'database', 'db');
+  const dbDirpath = path.dirname(dbFilepath);
+  if (!fs.existsSync(dbDirpath)) {
+    fs.mkdirSync(dbDirpath);
   }
 
-  const filepath = buildDataPath(server.config.STORAGE_DIRPATH, 'incoming');
-  const dirpath = path.dirname(filepath);
-  if (!fs.existsSync(dirpath)) {
-    fs.mkdirSync(dirpath);
+  const db = await sqlite.open({
+    filename: dbFilepath,
+    driver: sqlite3.Database,
+  });
+
+  await db.migrate();
+
+  if (server.config.IS_DEV_ENV) {
+    sqlite3.verbose();
   }
-  if (!fs.existsSync(filepath)) {
-    fs.writeFileSync(filepath, JSON.stringify([]));
-  }
 
-  return fs
-    .promises
-    .readFile(filepath)
-    .then((data) => {
-      const json = JSON.parse(data);
+  const storage = {
+    read: (where = {}) => {
+      const whereKeys = Object.keys(where);
+      const hasWhere = whereKeys.length > 0;
+      let select = 'SELECT * FROM events';
 
-      const storage = {
-        read: () => Promise.resolve(json),
-        update: (data, index) => {
-          json[index] = data;
-          return fs
-            .promises
-            .writeFile(filepath, JSON.stringify(json));
-        },
-        add: (data) => {
-          json.push(data);
-          return fs
-            .promises
-            .writeFile(filepath, JSON.stringify(json));
-        },
-      };
+      if (hasWhere) {
+        const placeholders = [];
+        where = whereKeys.reduce((acc, key) => {
+          const placeholder = `:${key}`;
+          placeholders.push(`${key}=${placeholder}`);
+          acc[placeholder] = where[key];
+          return acc;
+        }, {});
+        select = `${select} WHERE ${placeholders.join(' AND ')}`;
+      }
 
-      server.decorate('storage', storage);
-    });
+      return db.all(select, where)
+        .then((items) => items.map((item) => {
+          item.data = JSON.parse(item.data);
+          return item;
+        }))
+    },
+    update: ({ id, loadFromZoomState, loadToYoutubeState, data }) => {
+      const params = { loadFromZoomState, loadToYoutubeState, data: JSON.stringify(data) };
+      const columns = Object.keys(params).map(name => `${name}=?`);
+      const placeholders = Object.values(params);
+
+      return db.run(
+        `UPDATE events SET ${columns.join(', ')} WHERE id=(${id})`,
+        ...placeholders,
+      );
+    },
+    add: ({ loadFromZoomState, loadToYoutubeState, data }) => {
+      const params = { loadFromZoomState, loadToYoutubeState, data: JSON.stringify(data) };
+      const columns = Object.keys(params);
+      const placeholders = [];
+      const insertions = columns.reduce((acc, key) => {
+        const placeholder = `:${key}`;
+        placeholders.push(placeholder);
+        acc[placeholder] = params[key];
+        return acc;
+      }, {});
+
+      return db.run(
+        `INSERT INTO events (${columns.join(',')}) VALUES (${placeholders.join(',')})`,
+        insertions,
+      );
+    },
+  };
+
+  server.decorate('storage', storage);
+
+  return db;
 };
 
 const app = async (envName) => {
@@ -290,16 +323,15 @@ const app = async (envName) => {
   const config = await configValidator(envName);
   const server = initServer(config);
 
-  server.decorate('config', config);
-
-  await initIncomingDataStorage(server);
+  const db = await initDatabase(server);
   const cronJob = initTasks(server);
-
 
   const stop = async () => {
     server.log.info('Stop app', config);
     server.log.info('  Stop cron');
     await cronJob.stop();
+    server.log.info('  Stop database');
+    await db.close();
     server.log.info('  Stop server');
     await server.close();
     server.log.info('App stopped');

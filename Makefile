@@ -1,4 +1,6 @@
+PHONY=migration-generate
 V?=patch
+NAME?=migration
 USER_UID=$(shell id -u)
 USER_GID=$(shell id -g)
 
@@ -16,6 +18,15 @@ run-heroku:
 stop: stop-node
 stop-node:
 	kill -15 `pidof node` || true
+
+# make migration-generate NAME="hello"
+migration-generate: MIGRATION_FILEPATH=migrations/$$(date --utc +%Y%m%d%H%M%S)-$(NAME).sql
+migration-generate:
+	@> $(MIGRATION_FILEPATH)
+	@echo "Generated file: $(MIGRATION_FILEPATH)"
+
+time:
+	date +"Now time is +%FT%T%z"
 
 # dev
 lint:
