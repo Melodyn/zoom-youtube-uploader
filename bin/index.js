@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import app from '../index.js';
+import { app } from '../index.js';
 
 app(process.env.NODE_ENV)
   .catch((err) => {

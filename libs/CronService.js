@@ -1,8 +1,6 @@
 import { CronServiceError } from '../utils/errors.js';
 import { asyncTimeout } from '../utils/helpers.js';
 
-const addToQueue = (f) => setTimeout();
-
 export class CronService {
   constructor(task, period, firstDelay = 0) {
     if (!task || (typeof task !== 'function')) {

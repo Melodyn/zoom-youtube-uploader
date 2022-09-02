@@ -12,8 +12,11 @@ parserOptions:
 rules:
   indent: ["error", 2]
   camelcase: off
-  no-console: off
-  no-await-in-loop: off
-  import/extensions: off
   max-len: ["error", { code: 120, ignoreComments: true, ignoreTemplateLiterals: true }]
+  no-await-in-loop: off
+  no-console: off
+  no-param-reassign: 0
   no-underscore-dangle: [2, { "allow": ["__filename", "__dirname"] }]
+  import/extensions: off
+  import/no-default-export: 2
+  import/prefer-default-export: off

@@ -34,11 +34,11 @@ const configSchema = yup.object({
   CRON_PERIOD: yup.string().required(),
   CRON_DELAY: yup.string().required(),
   STORAGE_DIRPATH: yup.string()
-    .transform((_, paths) => path.resolve(__dirname, ...paths.split(',')))
+    .transform((__, paths) => path.resolve(__dirname, ...paths.split(',')))
     .required(),
 }).required();
 
-const configValidator = (envName) => {
+export const configValidator = (envName) => {
   const envExists = _.has(envConfigMap, envName);
   if (!envExists) throw new Error(`Unexpected env "${envName}"`);
   const envConfig = envConfigMap[envName];
@@ -50,5 +50,3 @@ const configValidator = (envName) => {
       throw new ConfigValidationError(err);
     });
 };
-
-export default configValidator;
