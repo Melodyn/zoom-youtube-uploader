@@ -29,10 +29,13 @@ const configSchema = yup.object({
   IS_PROD_ENV: yup.boolean().when('NODE_ENV', checkEnv(envsMap.prod)),
   PORT: yup.number().required(),
   HOST: yup.string().required(),
+  DOMAIN: yup.string().required(),
   LOG_LEVEL: yup.string().required(),
   ROUTE_UUID: yup.string().required(),
   CRON_PERIOD: yup.string().required(),
   CRON_DELAY: yup.string().required(),
+  YOUTUBE_CLIENT_ID: yup.string().required(),
+  YOUTUBE_CLIENT_SECRET: yup.string().required(),
   STORAGE_DIRPATH: yup.string()
     .transform((__, paths) => path.resolve(__dirname, ...paths.split(',')))
     .required(),

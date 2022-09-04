@@ -11,7 +11,6 @@ CREATE TABLE events (
 CREATE INDEX events_ix_state ON events (state);
 
 
-
 CREATE TABLE records (
   id                  INTEGER PRIMARY KEY,
   eventId             INTEGER NOT NULL,
@@ -27,6 +26,13 @@ CREATE INDEX records_ix_eventId ON records (eventId);
 CREATE INDEX records_ix_zoom ON records (loadFromZoomState);
 CREATE INDEX records_ix_youtube ON records (loadToYoutubeState);
 
+
+CREATE TABLE tokens (
+  id    INTEGER PRIMARY KEY,
+  token TEXT    NOT NULL
+);
+INSERT INTO tokens (token) VALUES ("{}");
+
 --------------------------------------------------------------------------------
 -- Down
 --------------------------------------------------------------------------------
@@ -39,3 +45,4 @@ DROP INDEX records_ix_youtube;
 
 DROP TABLE events;
 DROP TABLE records;
+DROP TABLE tokens;

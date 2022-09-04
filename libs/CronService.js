@@ -1,5 +1,4 @@
 import { CronServiceError } from '../utils/errors.js';
-import { asyncTimeout } from '../utils/helpers.js';
 
 export class CronService {
   constructor(task, period, firstDelay = 0) {
@@ -10,17 +9,20 @@ export class CronService {
     this.firstDelay = firstDelay;
     this.task = task;
     this.state = 'init';
-    this.timerId = null;
+    this.timerId = [];
   }
 
   async start() {
     if (this.state === 'init') {
       this.state = 'started';
-      await asyncTimeout(this.firstDelay, () => {});
-
-      while (this.state === 'started') {
-        this.timerId = await asyncTimeout(this.period, this.task);
-      }
+      const f = () => {
+        const timerId = setTimeout(() => {
+          this.task().finally(() => f());
+        }, this.period);
+        this.timerId.push(timerId);
+      };
+      const timerId = setTimeout(() => f(), this.firstDelay);
+      this.timerId.push(timerId);
     }
 
     this.state = 'stopped';
@@ -29,7 +31,8 @@ export class CronService {
   }
 
   async stop() {
-    clearTimeout(this.timerId);
+    this.timerId.forEach((timerId) => clearTimeout(timerId));
+    this.timerId = [];
     this.state = 'terminated';
   }
 }

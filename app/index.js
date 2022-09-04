@@ -7,6 +7,7 @@ import ms from 'ms';
 import * as luxon from 'luxon';
 import sqlite3 from 'sqlite3';
 import * as sqlite from 'sqlite';
+import { google } from 'googleapis';
 // app
 import { configValidator } from '../utils/configValidator.js';
 import { bodyFixture } from '../../fixtures/fixture.mjs';
@@ -56,47 +57,6 @@ const parseTopic = (topic) => {
   };
 };
 
-const initTasks = (server) => {
-  const itemsInProcessing = new Set();
-
-  const downloadTask = () => server.storage.records
-    .read({ loadFromZoomState: loadStateEnum.ready })
-    .then((items) => {
-      const loadPromises = items.map((item) => {
-        if (itemsInProcessing.has(item.id)) {
-          return Promise.resolve();
-        }
-        itemsInProcessing.add(item.id);
-
-        return downloadZoomFile({
-          filepath: item.data.meta.filepath,
-          url: item.data.download_url,
-          token: item.data.download_token,
-        })
-          .catch((err) => {
-            console.error(err);
-            item.loadFromZoomError = err.message;
-            item.loadFromZoomState = loadStateEnum.failed;
-          })
-          .then(() => {
-            if (item.loadFromZoomState !== loadStateEnum.failed) {
-              item.loadFromZoomState = loadStateEnum.success;
-            }
-            return server.storage.records.update(item);
-          });
-      });
-
-      return Promise.all(loadPromises);
-    });
-
-  const task = new CronService(
-    downloadTask,
-    ms(server.config.CRON_PERIOD),
-    ms(server.config.CRON_DELAY),
-  );
-  return task;
-};
-
 const initServer = (config) => {
   const pinoPrettyTransport = {
     transport: {
@@ -112,7 +72,63 @@ const initServer = (config) => {
   });
   server.decorate('config', config);
 
-  const route = {
+  const oauthCallbackRoutePath = '/oauth2callback';
+  const oauthRedirectURL = `${config.DOMAIN}:${config.PORT}${oauthCallbackRoutePath}`;
+  const oauthClient = new google.auth.OAuth2(
+    config.YOUTUBE_CLIENT_ID,
+    config.YOUTUBE_CLIENT_SECRET,
+    oauthRedirectURL,
+  );
+  server.decorate('oauthClient', oauthClient);
+
+  const scopes = [
+    'https://www.googleapis.com/auth/youtube.readonly',
+    'https://www.googleapis.com/auth/youtube.upload',
+  ];
+
+  const authorizationUrl = oauthClient.generateAuthUrl({
+    access_type: 'offline',
+    scope: scopes,
+    include_granted_scopes: true
+  });
+
+  const routeOauth = {
+    method: 'GET',
+    url: `/oauth2`,
+    handler(req, res) {
+      res.redirect(authorizationUrl);
+    },
+  };
+
+  server.route(routeOauth);
+
+  const routeOauthCallback = {
+    method: 'GET',
+    url: `${oauthCallbackRoutePath}`,
+    handler(req, res) {
+      if (!req.query || !req.query.code) {
+        res.code(400).send(`Query must be contain parameter "code"`);
+      } else {
+        oauthClient
+          .getToken(req.query.code)
+          .then(({ tokens }) => {
+            oauthClient.setCredentials(tokens);
+            return server.storage.tokens.set(tokens);
+          })
+          .then(() => {
+            res.code(200).send('ok');
+          })
+          .catch((err) => {
+            console.error(err);
+            res.code(400).send(err.message);
+          });
+      }
+    },
+  };
+
+  server.route(routeOauthCallback);
+
+  const routeEvents = {
     method: 'POST',
     url: `/${config.ROUTE_UUID}`,
     handler(req, res) {
@@ -161,9 +177,7 @@ const initServer = (config) => {
             topicName: '',
             topicAuthor: '',
             topicPotok: '',
-            meetingId: '',
             filename: '',
-            extension: '',
             filepath: '',
             youtubeDescription: '',
             youtubeName: '',
@@ -207,7 +221,7 @@ const initServer = (config) => {
               recordMeta.youtubePlaylist = 'Other';
             }
 
-            recordMeta.extension = record.file_extension.toLowerCase();
+            recordMeta.youtubeName = recordMeta.topicName;
             recordMeta.filename = `${recordMeta.topicName}${postfix}`
               .replace(/[/|\\]/gim, '|')
               .replace(/\s+/gim, '_')
@@ -215,7 +229,7 @@ const initServer = (config) => {
             recordMeta.filepath = buildVideoPath(
               server.config.STORAGE_DIRPATH,
               recordMeta.filename,
-              recordMeta.extension,
+              record.file_extension.toLowerCase(),
             );
             record.meta = recordMeta;
 
@@ -237,7 +251,7 @@ const initServer = (config) => {
     },
   };
 
-  server.route(route);
+  server.route(routeEvents);
 
   return server;
 };
@@ -324,15 +338,153 @@ const initDatabase = async (server) => {
     },
   });
 
+  const tokens = {
+    get: () => db.get('SELECT * FROM tokens').then(({ token }) => JSON.parse(token)),
+    set: (tokens) => db.run('UPDATE tokens SET token=:token WHERE id=1', {
+      ':token': JSON.stringify(tokens),
+    }),
+  };
+
   const storage = {
     events: generateQB('events'),
     records: generateQB('records'),
+    tokens,
   };
 
   server.decorate('storage', storage);
 
   return db;
 };
+
+const prepareDownloadTask = (server) => {
+  const itemsInProcessing = new Set();
+
+  return () => server.storage.records
+    .read({ loadFromZoomState: loadStateEnum.ready })
+    .then((items) => {
+      const loadPromises = items.map((item) => {
+        if (itemsInProcessing.has(item.id)) {
+          return Promise.resolve();
+        }
+        itemsInProcessing.add(item.id);
+
+        return Promise.resolve()
+        // return downloadZoomFile({
+        //   filepath: item.data.meta.filepath,
+        //   url: item.data.download_url,
+        //   token: item.data.download_token,
+        // })
+          .catch((err) => {
+            console.error(err);
+            item.loadFromZoomError = err.message;
+            item.loadFromZoomState = loadStateEnum.failed;
+          })
+          .then(() => {
+            if (item.loadFromZoomState !== loadStateEnum.failed) {
+              item.loadFromZoomState = loadStateEnum.success;
+            }
+            return server.storage.records.update(item);
+          });
+      });
+
+      return Promise.all(loadPromises);
+    });
+};
+
+const prepareYoutubeTask = (server) => {
+  const itemsInProcessing = new Set();
+  let oauthClientInitialized = false;
+  let youtubeService = null;
+
+  return () => {
+    if (!oauthClientInitialized) {
+      return server.storage.tokens.get()
+        .then((tokens) => {
+          const isEmpty = Object.keys(tokens).length === 0;
+          if (!isEmpty) {
+            server.oauthClient.setCredentials(tokens);
+
+            youtubeService = google.youtube({
+              version: 'v3',
+              auth: server.oauthClient,
+            });
+
+            oauthClientInitialized = true;
+          }
+        });
+    }
+
+    return server.storage.records
+      .read({
+        loadFromZoomState: loadStateEnum.success,
+        loadToYoutubeState: loadStateEnum.ready,
+      })
+      .then((items) => {
+        const loadPromises = items.map((item) => {
+          return Promise.resolve();
+
+          const data = {
+            "id": "",
+            "meeting_id": "",
+            "recording_start": "2022-09-02T13:34:04Z",
+            "recording_end": "2022-09-02T14:59:54Z",
+            "file_type": "MP4",
+            "file_extension": "MP4",
+            "file_size": 270195276,
+            "play_url": "",
+            "download_url": "",
+            "status": "completed",
+            "recording_type": "shared_screen_with_speaker_view",
+            "download_token": "",
+            "meta": {
+              "isHexletTopic": true,
+              "isCollegeTopic": false,
+              "date": "02.09.2022",
+              "topicName": "Тема от 02.09.2022;Автор",
+              "topicAuthor": "Автор",
+              "topicPotok": "potok-46",
+              "filename": "Тема_от_02.09.2022;Автор;2-0",
+              "filepath": "/home/melodyn/projects/work/zoom-youtube-uploader/videos/Тема_от_02.09.2022;Автор;2-0.mp4",
+              "youtubeDescription": "* Полное название: Тема\n* Дата: 02.09.2022\n* Автор: Автор\n* Поток: potok-46",
+              "youtubeName": "Тема от 02.09.2022;Автор",
+              "youtubePlaylist": "potok-46",
+              "youtubeUrl": "",
+              "zoomAuthorId": "mjD9HGTbT2OV0Mxq-M_o1w"
+            }
+          };
+
+          // if (itemsInProcessing.has(item.id)) {
+          //   return Promise.resolve();
+          // }
+          // itemsInProcessing.add(item.id);
+          //
+          // return Promise.resolve()
+          //   .catch((err) => {
+          //     console.error(err);
+          //     item.loadToYoutubeError = err.message;
+          //     item.loadToYoutubeState = loadStateEnum.failed;
+          //   })
+          //   .then(() => {
+          //     if (item.loadToYoutubeState !== loadStateEnum.failed) {
+          //       item.loadToYoutubeState = loadStateEnum.success;
+          //     }
+          //     return server.storage.records.update(item);
+          //   });
+        });
+
+        return Promise.all(loadPromises);
+      });
+  }
+};
+
+const initTasks = (server) => [
+  prepareDownloadTask(server),
+  prepareYoutubeTask(server),
+].map((task) => new CronService(
+  task,
+  ms(server.config.CRON_PERIOD),
+  ms(server.config.CRON_DELAY),
+));
 
 export const app = async (envName) => {
   process.on('unhandledRejection', (err) => {
@@ -341,15 +493,16 @@ export const app = async (envName) => {
   });
 
   const config = await configValidator(envName);
+
   const server = initServer(config);
 
   const db = await initDatabase(server);
-  const cronJob = initTasks(server);
+  const cronJobs = initTasks(server);
 
   const stop = async () => {
     server.log.info('Stop app', config);
     server.log.info('  Stop cron');
-    await cronJob.stop();
+    await Promise.all(cronJobs.map((cronJob) => cronJob.stop()));
     server.log.info('  Stop database');
     await db.close();
     server.log.info('  Stop server');
@@ -365,7 +518,7 @@ export const app = async (envName) => {
   process.on('SIGINT', stop);
 
   await server.listen({ port: config.PORT, host: config.HOST });
-  await cronJob.start();
+  await Promise.all(cronJobs.map((cronJob) => cronJob.start()));
 
   return {
     server,
